@@ -37,14 +37,13 @@ void setup() {
   // OPTIONAL CONFIGURATION ZONES
   // --------------------------------------------------------------------------
 
-  /*
+  
   // --- PWM speed control ---
   #ifdef LD06_PWM_PIN
   analogWriteFrequency(LD06_PWM_PIN, 30000); // PWM frequency: 20–50kHz recommended
-  analogWrite(LD06_PWM_PIN, 40);             // Duty cycle (~40%) sets rotation speed
+  analogWrite(LD06_PWM_PIN, 60);             // Duty cycle (~60%) sets rotation speed
   #endif
-  */
-
+  
   /*
   // --- LiDAR position configuration ---
   ld06.setOffsetPosition(0, 0, 0);   // X, Y offsets (mm) and angular offset (°)
@@ -52,14 +51,12 @@ void setup() {
   ld06.setUpsideDown(true);          // Invert orientation if LiDAR is mounted upside down
   */
 
-  /*
   // --- Data filtering configuration ---
   ld06.enableFiltering();            // Activate filtering
-  ld06.setIntensityThreshold(200);   // Filter out low-reflection points (< 200)
-  ld06.setDistanceRange(100, 1000);  // Keep points between 0.1–1.0 m
-  ld06.setAngleRange(0, 360);        // Keep all points (0–360°)
+  ld06.setIntensityThreshold(150);   // Filter out low-reflection points (< 200)
+  // ld06.setDistanceRange(100, 1000);  // Keep points between 0.1–1.0 m
+  // ld06.setAngleRange(0, 360);        // Keep all points (0–360°)
   // Example for ±10° around 0°: ld06.setAngleRange(350, 10);
-  */
 
   /*
   // --- Other options ---
