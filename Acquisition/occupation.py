@@ -50,6 +50,19 @@ class Grille:
         return (self.x0, self.x0 + self.nx * self.res,
                 self.y0, self.y0 + self.ny * self.res)
 
+    def proba_en(self, pts):
+        """Probabilité d'occupation (uint8) aux points monde (N, 2).
+
+        Hors grille : inconnu (127).
+        """
+        pts = np.asarray(pts, dtype=float).reshape(-1, 2)
+        ci = np.floor((pts[:, 0] - self.x0) / self.res).astype(np.int64)
+        cj = np.floor((pts[:, 1] - self.y0) / self.res).astype(np.int64)
+        dedans = (ci >= 0) & (ci < self.nx) & (cj >= 0) & (cj < self.ny)
+        out = np.full(len(pts), UNKNOWN, dtype=np.uint8)
+        out[dedans] = self.proba[cj[dedans], ci[dedans]]
+        return out
+
 
 def build(rays, res=0.10, max_range=MAX_RANGE):
     """Construit la grille.
