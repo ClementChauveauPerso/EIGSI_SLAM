@@ -51,14 +51,12 @@ void setup() {
   ld06.setUpsideDown(true);          // Invert orientation if LiDAR is mounted upside down
   */
 
-  /*
   // --- Data filtering configuration ---
   ld06.enableFiltering();            // Activate filtering
-  ld06.setIntensityThreshold(150);   // Filter out low-reflection points (< 200)
-  // ld06.setDistanceRange(100, 1000);  // Keep points between 0.1–1.0 m
-  // ld06.setAngleRange(0, 360);        // Keep all points (0–360°)
+  ld06.setIntensityThreshold(127);   // Filter out low-reflection points (< 127)
+  ld06.setDistanceRange(100, 10000);  // Keep points between 0.1–10.0 m
+  ld06.setAngleRange(0, 360);        // Keep all points (0–360°)
   // Example for ±10° around 0°: ld06.setAngleRange(350, 10);
-  */
 
   /*
   // --- Other options ---
