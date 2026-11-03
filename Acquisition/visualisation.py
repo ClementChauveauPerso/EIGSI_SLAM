@@ -1,4 +1,5 @@
-# visualisation.py — Rend un scan CSV du LD06, ou une carte globale, en image PNG.
+# visualisation.py — Rend un scan CSV du LD06, une carte globale ou une carte
+# d'occupation en image PNG.
 #
 # Parcourt récursivement un dossier, ignore les fichiers déjà rendus et génère les
 # autres à côté du CSV :
@@ -8,6 +9,8 @@
 # Deux formats sont reconnus d'après l'en-tête :
 #   - scan lidar  : N, Angle(°), Distance(mm), Intensity, x, y   -> rendu polaire
 #   - carte       : N, x(mm), y(mm), Intensity                   -> rendu cartésien
+#   - occupation  : en-tête « # occupation;res=… »               -> grille d'occupation
+#     (occupation.csv, libre / occupé / inconnu, généré à l'export de la carte).
 #
 # Rendu : nuage de points en mètres, axes gradués, grille et points colorés
 # selon leur intensité (0–255).
@@ -17,6 +20,7 @@
 # Dépendances : matplotlib, numpy
 
 import math
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -26,7 +30,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Patch
+
+try:  # module voisin (même dossier)
+    import occupation
+except ImportError:  # rendu sans le module : la carte d'occupation est ignorée
+    occupation = None
 
 ROOT = Path(r"C:\Users\Clement\Downloads\SLAM\Data\Scans")
 
@@ -178,9 +187,61 @@ def render(path, x, y, inten, name, polar=True):
               f"{len(x)} points  •  étendue {np.ptp(x):.2f} × {np.ptp(y):.2f} m")
     ax.set_title(detail, fontsize=9, color=MUTED, pad=10)
 
-    fig.savefig(path.with_suffix(".png"), dpi=160, facecolor=BG,
-                bbox_inches="tight", pad_inches=0.25)
+    # Écriture atomique : on rend dans un fichier temporaire puis on remplace, pour
+    # qu'une visionneuse ne tombe jamais sur un PNG à moitié écrit.
+    png = path.with_suffix(".png")
+    tmp = png.with_name(f".{png.stem}.tmp.png")
+    fig.savefig(tmp, dpi=160, facecolor=BG, bbox_inches="tight", pad_inches=0.25)
     plt.close(fig)
+    os.replace(tmp, png)
+
+
+def render_occupation(path, name):
+    """Rend une carte d'occupation (occupation.csv) : cases libres/occupées/inconnues."""
+    grille = occupation.load_csv(path)
+    x0, x1, y0, y1 = grille.extent()
+
+    fig = plt.figure(figsize=(9, 8.6), dpi=160)
+    ax = fig.add_axes((0.07, 0.10, 0.88, 0.78))
+    ax.set_facecolor(PANEL)
+    ax.imshow(occupation.to_rgb(grille), origin="lower", extent=(x0, x1, y0, y1),
+              interpolation="nearest", zorder=2)
+
+    span = max(x1 - x0, y1 - y0)
+    step = next(s for s in STEPS if span / s <= 7)
+    ax.set_xticks(np.arange(math.ceil(x0 / step) * step, x1 + step / 2, step))
+    ax.set_yticks(np.arange(math.ceil(y0 / step) * step, y1 + step / 2, step))
+    ax.grid(True, color=GRID, lw=0.7, zorder=3)
+    ax.tick_params(colors=MUTED, labelsize=8, length=3)
+    ax.set_xlabel("x (m)", fontsize=9, color=MUTED)
+    ax.set_ylabel("y (m)", fontsize=9, color=MUTED)
+    for spine in ax.spines.values():
+        spine.set_color(GRID)
+
+    if len(grille.sources):  # positions des lidars
+        ax.scatter(grille.sources[:, 0], grille.sources[:, 1], marker="x", s=46,
+                   linewidths=1.3, color="#e11d48", zorder=4)
+
+    handles = [
+        Patch(facecolor="#ffffff", edgecolor=GRID, label="libre"),
+        Patch(facecolor=tuple(float(c) for c in occupation.DARK), label="occupé"),
+        Patch(facecolor=tuple(float(c) for c in occupation.UNKNOWN_RGB),
+              edgecolor=GRID, label="inconnu"),
+        plt.Line2D([], [], marker="x", ls="", color="#e11d48", label="lidar"),
+    ]
+    fig.legend(handles=handles, loc="lower center", ncol=4, frameon=False,
+               fontsize=8, bbox_to_anchor=(0.51, 0.0))
+
+    fig.suptitle(f"Carte d'occupation {name}", fontsize=14, fontweight="bold",
+                 color=TEXT)
+    ax.set_title(f"{grille.nx} × {grille.ny} cases  •  résolution "
+                 f"{grille.res * 100:.0f} cm", fontsize=9, color=MUTED, pad=10)
+
+    png = path.with_suffix(".png")
+    tmp = png.with_name(f".{png.stem}.tmp.png")
+    fig.savefig(tmp, dpi=160, facecolor=BG, bbox_inches="tight", pad_inches=0.25)
+    plt.close(fig)
+    os.replace(tmp, png)
 
 
 def main():
@@ -200,6 +261,12 @@ def main():
     print(f"{len(todo)} fichier(s) à rendre sur {len(files)}")
     for path in todo:
         try:
+            if occupation and occupation.is_occupation(path):
+                name = (path.parent.name if path.stem == "occupation"
+                        else path.relative_to(base).with_suffix("").as_posix())
+                render_occupation(path, name)
+                print(f"  {path} (carte d'occupation)")
+                continue
             x, y, inten, polar = load(path)
             if x.size < 2:
                 raise ValueError("aucun point exploitable")
