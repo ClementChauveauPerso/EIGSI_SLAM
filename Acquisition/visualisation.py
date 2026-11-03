@@ -11,6 +11,8 @@
 #   - carte       : N, x(mm), y(mm), Intensity                   -> rendu cartésien
 #   - occupation  : en-tête « # occupation;res=… »               -> grille d'occupation
 #     (occupation.csv, libre / occupé / inconnu, généré à l'export de la carte).
+#   - vectoriel   : en-tête « # vectoriel;… »                    -> murs en segments
+#     (vectoriel.csv, généré à l'export de la carte).
 #
 # Rendu : nuage de points en mètres, axes gradués, grille et points colorés
 # selon leur intensité (0–255).
@@ -30,12 +32,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.collections import LineCollection
 from matplotlib.patches import Circle, Patch
 
 try:  # module voisin (même dossier)
     import occupation
+    import vectorielle
 except ImportError:  # rendu sans le module : la carte d'occupation est ignorée
-    occupation = None
+    occupation = vectorielle = None
 
 ROOT = Path(r"C:\Users\Clement\Downloads\SLAM\Data\Scans")
 
@@ -196,17 +200,8 @@ def render(path, x, y, inten, name, polar=True):
     os.replace(tmp, png)
 
 
-def render_occupation(path, name):
-    """Rend une carte d'occupation (occupation.csv) : cases libres/occupées/inconnues."""
-    grille = occupation.load_csv(path)
-    x0, x1, y0, y1 = grille.extent()
-
-    fig = plt.figure(figsize=(9, 8.6), dpi=160)
-    ax = fig.add_axes((0.07, 0.10, 0.88, 0.78))
-    ax.set_facecolor(PANEL)
-    ax.imshow(occupation.to_rgb(grille), origin="lower", extent=(x0, x1, y0, y1),
-              interpolation="nearest", zorder=2)
-
+def axes_cartesiens(ax, x0, x1, y0, y1):
+    """Graduations en mètres et cadre d'une carte cartésienne."""
     span = max(x1 - x0, y1 - y0)
     step = next(s for s in STEPS if span / s <= 7)
     ax.set_xticks(np.arange(math.ceil(x0 / step) * step, x1 + step / 2, step))
@@ -217,6 +212,19 @@ def render_occupation(path, name):
     ax.set_ylabel("y (m)", fontsize=9, color=MUTED)
     for spine in ax.spines.values():
         spine.set_color(GRID)
+
+
+def render_occupation(path, name):
+    """Rend une carte d'occupation (occupation.csv) : cases libres/occupées/inconnues."""
+    grille = occupation.load_csv(path)
+    x0, x1, y0, y1 = grille.extent()
+
+    fig = plt.figure(figsize=(9, 8.6), dpi=160)
+    ax = fig.add_axes((0.07, 0.10, 0.88, 0.78))
+    ax.set_facecolor(PANEL)
+    ax.imshow(occupation.to_rgb(grille), origin="lower", extent=(x0, x1, y0, y1),
+              interpolation="nearest", zorder=2)
+    axes_cartesiens(ax, x0, x1, y0, y1)
 
     if len(grille.sources):  # positions des lidars
         ax.scatter(grille.sources[:, 0], grille.sources[:, 1], marker="x", s=46,
@@ -244,6 +252,55 @@ def render_occupation(path, name):
     os.replace(tmp, png)
 
 
+def render_vector(path, name):
+    """Rend une carte vectorielle (vectoriel.csv) : murs en segments."""
+    carte = vectorielle.load_csv(path)
+    x0, x1, y0, y1 = carte.extent()
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    demi = max(max(x1 - x0, y1 - y0) / 2 * 1.06, 0.5)
+
+    fig = plt.figure(figsize=(9, 8.6), dpi=160)
+    ax = fig.add_axes((0.07, 0.10, 0.88, 0.78))
+    ax.set_facecolor(PANEL)
+    ax.set_aspect("equal")
+    ax.set_xlim(cx - demi, cx + demi)
+    ax.set_ylim(cy - demi, cy + demi)
+    axes_cartesiens(ax, cx - demi, cx + demi, cy - demi, cy + demi)
+
+    # segments épais = bien soutenus (même pondération que dans cartographie.py)
+    poids = np.clip(carte.hits - 2, 0, 58)
+    ax.add_collection(LineCollection(
+        carte.segments.reshape(-1, 2, 2),
+        colors=[tuple(float(c) for c in vectorielle.DARK)],
+        linewidths=0.7 + 2.3 * poids / 58.0, zorder=4))
+
+    if len(carte.sources):  # positions des lidars
+        ax.scatter(carte.sources[:, 0], carte.sources[:, 1], marker="x", s=46,
+                   linewidths=1.3, color="#e11d48", zorder=5)
+
+    handles = [
+        plt.Line2D([], [], color=tuple(float(c) for c in vectorielle.DARK),
+                   lw=2.2, label="mur"),
+        plt.Line2D([], [], marker="x", ls="", color="#e11d48", label="lidar"),
+    ]
+    fig.legend(handles=handles, loc="lower center", ncol=2, frameon=False,
+               fontsize=8, bbox_to_anchor=(0.51, 0.0))
+
+    fig.suptitle(f"Carte vectorielle {name}", fontsize=14, fontweight="bold",
+                 color=TEXT)
+    long = (float(np.hypot(carte.segments[:, 2] - carte.segments[:, 0],
+                           carte.segments[:, 3] - carte.segments[:, 1]).sum())
+            if len(carte) else 0.0)
+    ax.set_title(f"{len(carte)} segments  •  {long:.1f} m au total",
+                 fontsize=9, color=MUTED, pad=10)
+
+    png = path.with_suffix(".png")
+    tmp = png.with_name(f".{png.stem}.tmp.png")
+    fig.savefig(tmp, dpi=160, facecolor=BG, bbox_inches="tight", pad_inches=0.25)
+    plt.close(fig)
+    os.replace(tmp, png)
+
+
 def main():
     args = sys.argv[1:]
     force = any(a in ("-f", "--force") for a in args)
@@ -261,6 +318,12 @@ def main():
     print(f"{len(todo)} fichier(s) à rendre sur {len(files)}")
     for path in todo:
         try:
+            if vectorielle and vectorielle.is_vector(path):
+                name = (path.parent.name if path.stem == "vectoriel"
+                        else path.relative_to(base).with_suffix("").as_posix())
+                render_vector(path, name)
+                print(f"  {path} (carte vectorielle)")
+                continue
             if occupation and occupation.is_occupation(path):
                 name = (path.parent.name if path.stem == "occupation"
                         else path.relative_to(base).with_suffix("").as_posix())

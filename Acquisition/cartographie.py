@@ -8,10 +8,13 @@
 #   - glisser (droit), curseur θ, A/D ou flèches : faire tourner le scan ;
 #   - curseurs x / y : réglage fin de la position ;
 #   - à droite : carte d'occupation recalculée en direct (résolution réglable) ;
+#   - à droite aussi : carte vectorielle (murs en segments, tolérance réglable),
+#     elle aussi recalculée en direct ;
 #   - « Sauver l'assemblage… » : JSON listant chaque scan avec sa position/rotation
 #     (x, y en mètres, θ en degrés) — sans fusionner les points ;
 #   - « Exporter la carte… » : fusionne les scans dans Data\Cartes\<nom>\
-#     (carte.csv, occupation.csv) puis appelle visualisation.py pour les rendus PNG.
+#     (carte.csv, occupation.csv, vectoriel.csv) puis appelle visualisation.py
+#     pour les rendus PNG.
 #
 # Commandes clavier :
 #   ← → ↑ ↓  déplacer (Maj ×10, Ctrl ÷4)      A / D  tourner (Maj ×10, Ctrl ÷10)
@@ -32,14 +35,17 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle
 from matplotlib.widgets import Button, Slider
 
 try:  # module voisin (même dossier)
     import occupation as occ
+    import vectorielle as vec
 except ImportError:  # importé comme paquet
     from . import occupation as occ
+    from . import vectorielle as vec
 
 DEFAULT_ROOT = Path(r"C:\Users\Clement\Downloads\SLAM\Data\Scans")
 CARTES = DEFAULT_ROOT.parent / "Cartes"
@@ -109,12 +115,19 @@ class Carte:
         self.grid_res = 0.10
         self.grid_dirty = True
         self.grid_stamp = 0.0
+        self.grid_fit = True  # vue de la grille recadrée sur son étendue
         self.grid_timer = None
+        self.vector = None
+        self.vec_tol = vec.DEFAULT_TOL
+        self.vec_dirty = True
+        self.vec_stamp = 0.0
+        self.vec_fit = True  # vue de la carte vectorielle recadrée
         self.last_dir = self.root if self.root.is_dir() else Path.home()
 
         self._build_ui()
         self.refresh()
         self.update_grid()
+        self.update_vector()
 
     # -- interface ---------------------------------------------------------- #
     def _build_ui(self):
@@ -130,8 +143,8 @@ class Carte:
         self.fig.canvas.manager.set_window_title("Cartographie — assemblage de scans")
         self.fig.patch.set_facecolor(BG)
 
-        # Vue d'assemblage (centre) et carte d'occupation (droite) : même taille.
-        self.ax = self.fig.add_axes((0.200, 0.415, 0.365, 0.515))
+        # Trois vues côte à côte : assemblage, occupation, vectoriel.
+        self.ax = self.fig.add_axes((0.195, 0.415, 0.245, 0.515))
         self.ax.set_facecolor(PANEL)
         self.ax.set_aspect("equal")
         self.ax.grid(True, color=GRID, lw=0.8, zorder=0)
@@ -147,10 +160,11 @@ class Carte:
                                  fontsize=11, color=MUTED, linespacing=1.6)
         self.title = self.ax.set_title("Carte", fontsize=12, fontweight="bold",
                                        color=TEXT, pad=10)
-        self.status = self.fig.text(0.3825, 0.378, "", ha="center", va="center",
+        self.status = self.fig.text(0.3175, 0.357, "", ha="center", va="center",
                                     fontsize=9, color=TEXT)
         self.fig.text(0.5, 0.055,
-                      "glisser G : déplacer     glisser D : tourner     curseurs : réglage fin     "
+                      "glisser G : déplacer un scan  (ou naviguer dans une carte)     "
+                      "glisser D : tourner     molette : zoom     double-clic : recadrer     "
                       "flèches / A-D : pas fins (Maj ×10, Ctrl ÷10)     Suppr : retirer     Q : quitter",
                       ha="center", va="center", fontsize=8, color=MUTED)
 
@@ -192,7 +206,7 @@ class Carte:
                  ("y", "y (m)", -40.0, 40.0, 0.01, "%+.2f"),
                  ("th", "θ (°)", -180.0, 180.0, 0.1, "%+.1f"))
         for i, (key, label, lo, hi, step, fmt) in enumerate(specs):
-            ax = self.fig.add_axes((0.255, 0.300 - i * 0.06, 0.30, 0.024))
+            ax = self.fig.add_axes((0.195, 0.300 - i * 0.06, 0.245, 0.024))
             slider = Slider(ax, label, lo, hi, valinit=0, valstep=step,
                             valfmt=fmt, color=AXIS)
             slider.label.set_fontsize(9)
@@ -203,7 +217,7 @@ class Carte:
             self.sliders[key] = slider
 
         # Carte d'occupation : même cadre que la vue d'assemblage.
-        self.grid_ax = self.fig.add_axes((0.615, 0.415, 0.365, 0.515))
+        self.grid_ax = self.fig.add_axes((0.4675, 0.415, 0.245, 0.515))
         self.grid_ax.set_facecolor("#f3f4f7")
         self.grid_ax.set_aspect("equal")
         self.grid_ax.set_xticks([])
@@ -226,12 +240,12 @@ class Carte:
         ]
         self.grid_ax.legend(handles=handles, loc="upper center",
                             bbox_to_anchor=(0.5, -0.02), ncol=4, frameon=False,
-                            fontsize=8, handlelength=1.1, columnspacing=1.4,
+                            fontsize=7.5, handlelength=1.1, columnspacing=1.1,
                             handletextpad=0.4, borderaxespad=0.0)
-        self.grid_info = self.fig.text(0.7975, 0.300, "aucun scan chargé",
+        self.grid_info = self.fig.text(0.5905, 0.300, "aucun scan chargé",
                                        ha="center", va="center", fontsize=8,
                                        color=MUTED)
-        res_ax = self.fig.add_axes((0.685, 0.180, 0.195, 0.024))
+        res_ax = self.fig.add_axes((0.490, 0.120, 0.165, 0.024))
         self.res_slider = Slider(res_ax, "résolution (m)", 0.02, 0.30,
                                  valinit=self.grid_res, valstep=0.01,
                                  valfmt="%.2f", color=AXIS)
@@ -241,6 +255,43 @@ class Carte:
         self.res_slider.valtext.set_color(TEXT)
         self.res_slider.on_changed(self.on_grid_res)
 
+        # Carte vectorielle : même cadre, segments épais = bien soutenus.
+        self.vec_ax = self.fig.add_axes((0.740, 0.415, 0.245, 0.515))
+        self.vec_ax.set_facecolor(PANEL)
+        self.vec_ax.set_aspect("equal")
+        self.vec_ax.set_xticks([])
+        self.vec_ax.set_yticks([])
+        for spine in self.vec_ax.spines.values():
+            spine.set_color(GRID)
+        self.vec_segments = LineCollection([], colors=[tuple(float(c) for c in vec.DARK)],
+                                           linewidths=2.0, zorder=3)
+        self.vec_ax.add_collection(self.vec_segments)
+        self.vec_src, = self.vec_ax.plot([], [], "x", ms=6, mew=1.3,
+                                         color="#e11d48", zorder=4)
+        self.vec_ax.set_title("Carte vectorielle", fontsize=12,
+                              fontweight="bold", color=TEXT, pad=10)
+        handles = [
+            Line2D([], [], color=tuple(float(c) for c in vec.DARK), lw=2.2,
+                   label="mur"),
+            Line2D([], [], marker="x", ls="", color="#e11d48", label="lidar"),
+        ]
+        self.vec_ax.legend(handles=handles, loc="upper center",
+                           bbox_to_anchor=(0.5, -0.02), ncol=2, frameon=False,
+                           fontsize=7.5, handlelength=1.1, columnspacing=1.4,
+                           handletextpad=0.4, borderaxespad=0.0)
+        self.vec_info = self.fig.text(0.8625, 0.300, "aucun scan chargé",
+                                      ha="center", va="center", fontsize=8,
+                                      color=MUTED)
+        tol_ax = self.fig.add_axes((0.775, 0.120, 0.165, 0.024))
+        self.tol_slider = Slider(tol_ax, "tolérance (m)", 0.02, 0.20,
+                                 valinit=self.vec_tol, valstep=0.01,
+                                 valfmt="%.2f", color=AXIS)
+        self.tol_slider.label.set_fontsize(9)
+        self.tol_slider.label.set_color(MUTED)
+        self.tol_slider.valtext.set_fontsize(9)
+        self.tol_slider.valtext.set_color(TEXT)
+        self.tol_slider.on_changed(self.on_vec_tol)
+
         self.fig.canvas.mpl_connect("key_press_event", self.on_key)
         self.fig.canvas.mpl_connect("button_press_event", self.on_press)
         self.fig.canvas.mpl_connect("button_release_event", self.on_release)
@@ -248,11 +299,11 @@ class Carte:
         self.fig.canvas.mpl_connect("scroll_event", self.on_scroll)
         self.fig.canvas.mpl_connect("close_event", self.on_close)
 
-        # Recalcul de la carte d'occupation ~5 fois/s (jamais pendant un rendu).
+        # Recalcul des cartes ~5 fois/s (jamais pendant un rendu).
         try:
             if plt.get_backend().lower() != "agg":
                 self.grid_timer = self.fig.canvas.new_timer(interval=200)
-                self.grid_timer.add_callback(self.update_grid)
+                self.grid_timer.add_callback(self.tick)
                 self.grid_timer.start()
         except Exception:
             self.grid_timer = None
@@ -467,6 +518,8 @@ class Carte:
         self.update_sliders()
         self.grid_dirty = True
         self.grid_stamp = time.monotonic()
+        self.vec_dirty = True
+        self.vec_stamp = time.monotonic()
         self.fig.canvas.draw_idle()
 
     def update_sliders(self):
@@ -480,6 +533,8 @@ class Carte:
         self.syncing = False
 
     def fit(self):
+        self.fit_grid()
+        self.fit_vec()
         pts = [transform(s.pts, s.pose) for s in self.scans if len(s.pts)]
         if not pts:
             self.ax.set_xlim(-5, 5)
@@ -494,10 +549,52 @@ class Carte:
         self.ax.set_ylim(center[1] - span / 2, center[1] + span / 2)
         self.fig.canvas.draw_idle()
 
-    # -- carte d'occupation ------------------------------------------------- #
+    # -- cartes (occupation, vectorielle) ------------------------------------ #
+    @staticmethod
+    def _map_window(carte):
+        """Fenêtre carrée centrée sur la carte : même taille que la vue d'assemblage."""
+        x0, x1, y0, y1 = carte.extent()
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        span = max(x1 - x0, y1 - y0) * 1.02
+        return cx - span / 2, cx + span / 2, cy - span / 2, cy + span / 2
+
+    def fit_grid(self):
+        """Recadre la carte d'occupation sur son étendue."""
+        self.grid_fit = True
+        if self.grid is None:
+            self.grid_ax.set_xlim(-1, 1)
+            self.grid_ax.set_ylim(-1, 1)
+        else:
+            wx0, wx1, wy0, wy1 = self._map_window(self.grid)
+            self.grid_ax.set_xlim(wx0, wx1)
+            self.grid_ax.set_ylim(wy0, wy1)
+        self.fig.canvas.draw_idle()
+
+    def fit_vec(self):
+        """Recadre la carte vectorielle sur son étendue."""
+        self.vec_fit = True
+        if self.vector is None:
+            self.vec_ax.set_xlim(-1, 1)
+            self.vec_ax.set_ylim(-1, 1)
+        else:
+            wx0, wx1, wy0, wy1 = self._map_window(self.vector)
+            self.vec_ax.set_xlim(wx0, wx1)
+            self.vec_ax.set_ylim(wy0, wy1)
+        self.fig.canvas.draw_idle()
+
+    def fit_map(self, ax):
+        """Recadre la carte pointée par la souris."""
+        self.fit_vec() if ax is self.vec_ax else self.fit_grid()
+
+    def tick(self, *_args):
+        """Rappel du minuteur : met à jour les deux cartes si besoin."""
+        self.update_grid()
+        self.update_vector()
+
     def on_grid_res(self, value):
         self.grid_res = float(value)
         self.grid_dirty = True
+        self.grid_fit = True  # nouvelle résolution : on recadre
         if self.grid_timer is None:  # pas de boucle d'événements (mode Agg) : direct
             self.update_grid()
 
@@ -526,14 +623,60 @@ class Carte:
             self.grid_img.set_data(occ.to_rgb(grille))
             x0, x1, y0, y1 = grille.extent()
             self.grid_img.set_extent((x0, x1, y0, y1))
-            self.grid_ax.set_xlim(x0, x1)
-            self.grid_ax.set_ylim(y0, y1)
+            if self.grid_fit:  # l'utilisateur n'a pas zoomé : on recadre
+                wx0, wx1, wy0, wy1 = self._map_window(grille)
+                self.grid_ax.set_xlim(wx0, wx1)
+                self.grid_ax.set_ylim(wy0, wy1)
             if len(grille.sources):
                 self.grid_src.set_data(grille.sources[:, 0], grille.sources[:, 1])
             else:
                 self.grid_src.set_data([], [])
             self.grid_info.set_text(f"{grille.nx} × {grille.ny} cases  •  "
                                     f"{grille.res * 100:.0f} cm")
+        self.fig.canvas.draw_idle()
+
+    def on_vec_tol(self, value):
+        self.vec_tol = float(value)
+        self.vec_dirty = True
+        self.vec_fit = True  # nouvelle tolérance : on recadre
+        if self.grid_timer is None:  # pas de boucle d'événements (mode Agg) : direct
+            self.update_vector()
+
+    def update_vector(self, *_args, force=False):
+        """(Re)construit la carte vectorielle à partir des scans assemblés."""
+        if not self.vec_dirty:
+            return
+        if (not force and self.grid_timer is not None
+                and time.monotonic() - self.vec_stamp < 0.35):
+            return
+        self.vec_dirty = False
+        rays = [(transform(s.pts, s.pose), s.pose[:2])
+                for s in self.scans if len(s.pts)]
+        carte = vec.build(rays, self.vec_tol, grille=self.grid) if rays else None
+        self.vector = carte
+        if carte is None:
+            self.vec_segments.set_segments(np.empty((0, 2, 2)))
+            self.vec_ax.set_xlim(-1, 1)
+            self.vec_ax.set_ylim(-1, 1)
+            self.vec_src.set_data([], [])
+            self.vec_info.set_text("aucun scan chargé")
+        else:
+            self.vec_segments.set_segments(carte.segments.reshape(-1, 2, 2))
+            # un mur soutenu par beaucoup de points est tracé plus épais
+            poids = np.clip(carte.hits - 2, 0, 58)
+            self.vec_segments.set_linewidths(0.7 + 2.3 * poids / 58.0)
+            if self.vec_fit:  # l'utilisateur n'a pas zoomé : on recadre
+                wx0, wx1, wy0, wy1 = self._map_window(carte)
+                self.vec_ax.set_xlim(wx0, wx1)
+                self.vec_ax.set_ylim(wy0, wy1)
+            if len(carte.sources):
+                self.vec_src.set_data(carte.sources[:, 0], carte.sources[:, 1])
+            else:
+                self.vec_src.set_data([], [])
+            x1, x2 = carte.segments[:, 0], carte.segments[:, 2]
+            y1, y2 = carte.segments[:, 1], carte.segments[:, 3]
+            self.vec_info.set_text(f"{len(carte)} segments  •  "
+                                   f"{np.hypot(x2 - x1, y2 - y1).sum():.1f} m")
         self.fig.canvas.draw_idle()
 
     def on_close(self, _event):
@@ -678,9 +821,9 @@ class Carte:
             np.savetxt(f, table, fmt="%d", delimiter=",")
         print(f"Carte « {name} » ({len(pts)} points) : {csv}")
 
-        # Carte d'occupation : même dossier, rendue en PNG par visualisation.py.
-        grille = occ.build([(transform(s.pts, s.pose), s.pose[:2]) for s in usable],
-                           self.grid_res)
+        # Cartes d'occupation et vectorielle : même dossier, rendues en PNG.
+        rays = [(transform(s.pts, s.pose), s.pose[:2]) for s in usable]
+        grille = occ.build(rays, self.grid_res)
         occ_csv = None
         if grille is not None:
             occ_csv = folder / "occupation.csv"
@@ -688,8 +831,16 @@ class Carte:
             print(f"Occupation ({grille.nx} × {grille.ny} cases à "
                   f"{grille.res * 100:.0f} cm) : {occ_csv}")
 
+        carte_vec = vec.build(rays, self.vec_tol, grille=grille)
+        vec_csv = None
+        if carte_vec is not None:
+            vec_csv = folder / "vectoriel.csv"
+            vec.save_csv(carte_vec, vec_csv)
+            print(f"Vectoriel ({len(carte_vec)} segments) : {vec_csv}")
+
         png = folder / "carte.png"
         occ_png = folder / "occupation.png"
+        vec_png = folder / "vectoriel.png"
         self.notice = f"Carte « {name} » exportée — rendu en cours…"
         self.refresh()
         self.fig.canvas.draw()
@@ -703,12 +854,15 @@ class Carte:
             detail = str(exc)
         if png.exists():
             print(f"Rendu : {png}")
+            fichiers = ["carte.csv"]
             if occ_csv is not None and occ_png.exists():
                 print(f"Rendu : {occ_png}")
-                self.notice = (f"Carte « {name} » exportée : carte.csv, "
-                               "occupation.csv et rendus PNG")
-            else:
-                self.notice = f"Carte « {name} » exportée : carte.csv + carte.png"
+                fichiers.append("occupation.csv")
+            if vec_csv is not None and vec_png.exists():
+                print(f"Rendu : {vec_png}")
+                fichiers.append("vectoriel.csv")
+            self.notice = (f"Carte « {name} » exportée : {', '.join(fichiers)} "
+                           "et rendus PNG")
             if OPEN_AFTER_EXPORT:
                 self.open_image(png)
         else:
@@ -780,11 +934,24 @@ class Carte:
         if event.inaxes is self.panel and event.button == 1:
             self.click_list(event)
             return
-        if self.naming is not None or event.inaxes is not self.ax:
+        if self.naming is not None:
+            return
+        if event.inaxes in (self.grid_ax, self.vec_ax):  # naviguer dans une carte
+            if event.dblclick:
+                self.fit_map(event.inaxes)
+                return
+            self.drag = {"target": "map", "ax": event.inaxes,
+                         "attr": "vec_fit" if event.inaxes is self.vec_ax else "grid_fit",
+                         "pix": event.x, "pixy": event.y,
+                         "xlim": event.inaxes.get_xlim(),
+                         "ylim": event.inaxes.get_ylim()}
+            return
+        if event.inaxes is not self.ax:
             return
         if not (0 <= self.active < len(self.scans)):
             return
-        self.drag = {"button": event.button, "x": event.xdata, "y": event.ydata,
+        self.drag = {"target": "scan", "button": event.button,
+                     "x": event.xdata, "y": event.ydata,
                      "pix": event.x, "pixy": event.y,
                      "pose": self.scans[self.active].pose.copy(),
                      "xlim": self.ax.get_xlim(), "ylim": self.ax.get_ylim()}
@@ -798,13 +965,29 @@ class Carte:
                 return
 
     def on_release(self, _event):
-        if self.drag is not None:
+        if self.drag is not None and self.drag.get("target") == "scan":
             self.notice = None
             self.refresh()
         self.drag = None
 
     def on_motion(self, event):
-        if self.drag is None or not (0 <= self.active < len(self.scans)):
+        if self.drag is None:
+            return
+        if self.drag.get("target") == "map":  # panoramique d'une carte
+            if event.x is None:
+                return
+            ax = self.drag["ax"]
+            w, h = ax.bbox.width, ax.bbox.height
+            kx = (self.drag["xlim"][1] - self.drag["xlim"][0]) / max(w, 1)
+            ky = (self.drag["ylim"][1] - self.drag["ylim"][0]) / max(h, 1)
+            dx = (event.x - self.drag["pix"]) * kx
+            dy = (event.y - self.drag["pixy"]) * ky
+            ax.set_xlim(self.drag["xlim"][0] - dx, self.drag["xlim"][1] - dx)
+            ax.set_ylim(self.drag["ylim"][0] - dy, self.drag["ylim"][1] - dy)
+            setattr(self, self.drag["attr"], False)
+            self.fig.canvas.draw_idle()
+            return
+        if not (0 <= self.active < len(self.scans)):
             return
         button = self.drag["button"]
         pose = self.drag["pose"].copy()
@@ -837,6 +1020,18 @@ class Carte:
             limit = max(len(self.scans) - self.visible_rows, 0)
             self.scroll = max(0, min(self.scroll + step, limit))
             self.draw_list()
+            self.fig.canvas.draw_idle()
+            return
+        if event.inaxes in (self.grid_ax, self.vec_ax) and event.xdata is not None:
+            # zoom d'une carte autour du curseur
+            ax = event.inaxes
+            factor = 0.85 if event.button == "up" else 1 / 0.85
+            x, y = event.xdata, event.ydata
+            x0, x1 = ax.get_xlim()
+            y0, y1 = ax.get_ylim()
+            ax.set_xlim(x + (x0 - x) * factor, x + (x1 - x) * factor)
+            ax.set_ylim(y + (y0 - y) * factor, y + (y1 - y) * factor)
+            setattr(self, "vec_fit" if ax is self.vec_ax else "grid_fit", False)
             self.fig.canvas.draw_idle()
             return
         if event.inaxes is not self.ax or event.xdata is None:
