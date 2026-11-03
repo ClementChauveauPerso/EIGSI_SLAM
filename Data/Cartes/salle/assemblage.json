@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "scans": [
+    {
+      "file": "C:/Users/Clement/Downloads/SLAM/Data/Scans/j1/salle/bas/20261103_120727.csv",
+      "x": 1.5674,
+      "y": -2.2513,
+      "theta_deg": -3.6
+    },
+    {
+      "file": "C:/Users/Clement/Downloads/SLAM/Data/Scans/j1/salle/bas_gauche/20261103_115430.csv",
+      "x": -0.1722,
+      "y": -2.3712,
+      "theta_deg": -1.8
+    },
+    {
+      "file": "C:/Users/Clement/Downloads/SLAM/Data/Scans/j1/salle/gauche/20261103_120658.csv",
+      "x": -0.7251,
+      "y": -0.6009,
+      "theta_deg": -7.1
+    },
+    {
+      "file": "C:/Users/Clement/Downloads/SLAM/Data/Scans/j1/salle/haut_gauche/20261103_115339.csv",
+      "x": -0.4741,
+      "y": 1.0946,
+      "theta_deg": -0.9
+    },
+    {
+      "file": "C:/Users/Clement/Downloads/SLAM/Data/Scans/j1/salle/haut/20261103_120839.csv",
+      "x": 1.456,
+      "y": 1.5384,
+      "theta_deg": -5.4
+    },
+    {
+      "file": "C:/Users/Clement/Downloads/SLAM/Data/Scans/j1/salle/haut_droite/20261103_115545.csv",
+      "x": 4.1228,
+      "y": 1.859,
+      "theta_deg": 0.0
+    },
+    {
+      "file": "C:/Users/Clement/Downloads/SLAM/Data/Scans/j1/salle/droite/20261103_120800.csv",
+      "x": 4.1571,
+      "y": -0.5214,
+      "theta_deg": 2.2
+    },
+    {
+      "file": "C:/Users/Clement/Downloads/SLAM/Data/Scans/j1/salle/bas_droite/20261103_115513.csv",
+      "x": 4.3936,
+      "y": -2.135,
+      "theta_deg": 2.7
+    }
+  ]
+}
