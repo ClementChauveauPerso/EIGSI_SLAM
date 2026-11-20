@@ -27,6 +27,7 @@
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -810,6 +811,12 @@ class Carte:
         name = self.clean_name(name) or self.next_name()
         folder = self.cartes / name
         folder.mkdir(parents=True, exist_ok=True)
+        # Conserve les scans bruts sources pour pouvoir les revoir plus tard.
+        scans_dir = folder / "scans"
+        scans_dir.mkdir(exist_ok=True)
+        for s in self.scans:
+            if s.path is not None and s.path.exists():
+                shutil.copy2(s.path, scans_dir / s.path.name)
         pts = np.vstack([transform(s.pts, s.pose) for s in usable])
         inten = np.concatenate([s.inten for s in usable])
         table = np.column_stack((np.arange(len(pts)),
