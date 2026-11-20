@@ -31,7 +31,7 @@ import numpy as np
 TOL = 1e-6             # tolérance numérique (m, et sinus pour le parallélisme)
 MIN_RANGE = 0.05       # en deçà, le point est dans le boîtier du lidar
 MAX_RANGE = 12.0       # portée utile d'un LD06
-DEFAULT_TOL = 0.05     # écart max point/droite (m)
+DEFAULT_TOL = 0.04     # écart max point/droite (m)
 MIN_LEN = 0.12         # segment plus court = bruit
 GAP_MIN = 0.10         # discontinuité mini entre deux points d'un scan (m)
 GAP_RATIO = 0.06       # … et proportionnelle à la portée (1 point ≈ 1°)
