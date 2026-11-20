@@ -1,3 +1,9 @@
 opencode.json
 
 **/__pycache__/**
+
+# Sessions live locales (données volumineuses, ~50 Mo)
+Data/Cartes/Live_*/
+
+# Guide du TP (déjà retiré du suivi, conservé en local)
+Cours/
