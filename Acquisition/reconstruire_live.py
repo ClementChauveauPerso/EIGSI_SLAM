@@ -19,9 +19,15 @@ import algo_base as base
 import occupation as occ
 import vectorielle as vec
 import scan_matching as sm
-from temps_reel import (CarteLive, RES, COTE, RHO, MAX_DELTA_D_M,
-                        MAX_DELTA_THETA_DEG, MAX_DELTA_SCORE_BON,
-                        CARTE_SCORE_MIN, ALGO, SIGMA)
+from temps_reel import (CarteLive, RES, COTE, RHO, MAX_DELTA_SCORE_BON,
+                        CARTE_SCORE_MIN, QUALITE_MIN, QUALITE_REL,
+                        SEUIL_DECAY, ALGO, SIGMA)
+
+# Les scans d'un replay sont consécutifs : le robot ne peut pas « sauter ».
+PAS_MAX_D_M = 0.5        # déplacement max entre deux scans acceptés (m)
+PAS_MAX_DEG = 40.0       # rotation max entre deux scans acceptés (°)
+RECAL_MAX_D_M = 0.30     # passe 2 : correction max autorisée par scan (m)
+RECAL_MAX_DEG = 10.0     # passe 2 : correction max autorisée par scan (°)
 
 from algo_base import _echantillon, _bilineaire
 from scipy.ndimage import distance_transform_edt
@@ -57,6 +63,13 @@ def qualite(pts, grille):
     return score
 
 
+def ecart(a, b):
+    """(distance en m, écart d'angle en °) entre deux poses."""
+    dp = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
+    return (math.hypot(dp[0], dp[1]),
+            abs(math.degrees(carto.wrap_angle(dp[2]))))
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage : python reconstruire_live.py <dossier_de_scans>")
@@ -75,9 +88,11 @@ def main():
     print(f"Replay de {len(fichiers)} scans depuis {scans_dir}")
 
     carte = CarteLive()
-    algo = next(a for a in sm.ALGORITHMES if a.nom == ALGO)
+    algo = next(a for a in sm.ALGORITHMES if a.nom == ALGO)            # global
+    local = next(a for a in sm.ALGORITHMES if a.nom == "gradient")     # continu
     pose = np.zeros(3)
     archives = deque()
+    scores, echecs, refuses = [], 0, 0
     t0 = time.perf_counter()
 
     for k, f in enumerate(fichiers):
@@ -85,33 +100,42 @@ def main():
         if not len(pts):
             continue
 
-        glob = None
-        if carte.grille is None:
-            pose = np.zeros(3)
-            score = None
-        else:
+        score = None
+        if carte.grille is not None:
             fn = qualite(pts, carte.grille)
             ctx = {"pts": pts, "grille": carte.grille}
-            res = algo.run(fn, pose.copy(), ctx)
-            pose = res.pose
-            score = float(fn(pose))
-            # petit_mouvement / saut_justifie : accepter le petit mouvement
-            # ou un saut justifié par un bon score
-            if archives:
-                dp = pose - archives[-1][2]
-                dp[2] = carto.wrap_angle(dp[2])
-                d_dist = math.hypot(dp[0], dp[1])
-                d_deg = abs(math.degrees(dp[2]))
-                petit = d_dist <= 1.0 and d_deg <= 70.0
-                justifie = petit or score >= MAX_DELTA_SCORE_BON
-                if not justifie:
-                    # relocalisation de secours simple : tester l'origine
-                    res0 = algo.run(fn, np.zeros(3), ctx)
-                    s0 = float(fn(res0.pose))
-                    if s0 > score:
-                        pose, score = res0.pose, s0
+            # 1) suivi continu : on repart de la dernière pose (le scan est
+            #    pris à quelques cm / degrés du précédent).
+            res = local.run(fn, pose.copy(), ctx)
+            cand, score = res.pose, float(fn(res.pose))
+            seuil = max(QUALITE_MIN, QUALITE_REL * (float(np.median(scores))
+                        if scores else 0.0) * SEUIL_DECAY ** echecs)
+            # 2) seulement si le suivi est mauvais : recherche globale. Elle
+            #    balaye ±180° de cap et peut tomber sur un faux optimum
+            #    (salle rectangulaire = symétrique) : son résultat reste soumis
+            #    au verrou de saut ci-dessous.
+            if score < max(seuil, CARTE_SCORE_MIN):
+                res = algo.run(fn, pose.copy(), ctx)
+                s2 = float(fn(res.pose))
+                if s2 > score:
+                    cand, score = res.pose, s2
+            d_dist, d_deg = ecart(cand, pose)
+            saut = d_dist > PAS_MAX_D_M or d_deg > PAS_MAX_DEG
+            if (not np.isfinite(score) or not np.isfinite(cand).all()
+                    or score < max(seuil, CARTE_SCORE_MIN)
+                    or (saut and score < MAX_DELTA_SCORE_BON)):
+                # scan rejeté : ni la pose ni la carte ne bougent
+                refuses += 1
+                echecs += 1
+                scores.append(score if np.isfinite(score) else 0.0)
+                print(f"  scan {k+1} rejeté : score {score:.2f}, "
+                      f"saut {d_dist:.2f} m / {d_deg:.0f}°")
+                continue
+            echecs = 0
+            pose = np.asarray(cand, dtype=float)
+            scores.append(score)
 
-        pose = np.asarray(pose, dtype=float)
+        pose = np.asarray(pose, dtype=float).copy()
         pose[2] = carto.wrap_angle(pose[2])
         glob = carto.transform(pts, pose)
         carte.update([(glob, pose[:2])])
@@ -124,24 +148,32 @@ def main():
                   f"score {sc}")
 
     t_total = time.perf_counter() - t0
-    print(f"Localisation terminée : {len(archives)} scans en {t_total:.1f}s")
+    print(f"Localisation terminée : {len(archives)} scans gardés, "
+          f"{refuses} rejetés, en {t_total:.1f}s")
 
     # --- passe 2 : recalage global sur la carte finale --------------------- #
-    # La carte de la passe 1 est maintenant complète : relocaliser chaque
-    # scan sur cette carte finale corrige la dérive accumulée (les premiers
-    # scans, localisés sur une carte vide, étaient les plus touchés).
+    # La carte de la passe 1 est complète : on affine chaque scan sur cette
+    # carte, depuis SA pose de la passe 1 et avec une correction bornée.
     print("Recalage global sur la carte finale…")
-    poses_finaux = []
-    for k, (pts, inten, _pose) in enumerate(archives):
+    poses_finaux, corriges = [], 0
+    for k, (pts, inten, pose1) in enumerate(archives):
         fn = qualite(pts, carte.grille)
         ctx = {"pts": pts, "grille": carte.grille}
-        res = algo.run(fn, np.zeros(3), ctx)   # départ libre : la carte finale
-        pose2 = res.pose                        # contient déjà tous les murs
-        score2 = float(fn(pose2))
-        poses_finaux.append(pose2.copy())
+        score1 = float(fn(pose1))
+        # départ = pose de la passe 1 (jamais l'origine) : correction locale
+        res = local.run(fn, pose1.copy(), ctx)
+        pose2, score2 = res.pose, float(fn(res.pose))
+        d_dist, d_deg = ecart(pose2, pose1)
+        if (score2 > score1 and d_dist <= RECAL_MAX_D_M
+                and d_deg <= RECAL_MAX_DEG):
+            poses_finaux.append(np.asarray(pose2, dtype=float).copy())
+            corriges += 1
+        else:                       # sinon on garde la pose de la passe 1
+            poses_finaux.append(pose1.copy())
         if (k + 1) % 20 == 0 or k == len(archives) - 1:
-            sc = f"{score2:.2f}"
-            print(f"  recal {k+1}/{len(archives)} : score {sc}")
+            print(f"  recal {k+1}/{len(archives)} : score {score1:.2f} -> "
+                  f"{max(score1, score2):.2f}")
+    print(f"{corriges}/{len(archives)} poses corrigées")
 
     # remplacer les poses archives par les poses recalées
     archives = deque((pts, inten, p) for (pts, inten, _old), p
