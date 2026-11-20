@@ -79,6 +79,7 @@ J'ai travaillé avec Claude Code pour l'écriture / test des différents scripts
 
 Depuis le dossier `Acquisition/` (dépendances : `pip install numpy scipy matplotlib pyserial`) :
 
+```bash
 python acquisition.py COM3 mon/dossier --tours 5
 python visualisation.py ../Data/Scans
 python scan_matching.py
@@ -87,9 +88,10 @@ python tableau_erreurs.py
 python temps_reel.py COM3
 python temps_reel.py --replay ../Data/Cartes/salle/assemblage.json
 python reconstruire_live.py ../Data/Cartes/Live_20261104_190647/scans
+```
 
 ## Ce que je retiens du module
 
-**Ce que j'ai apprécié** : la satisfaction de voir la salle apparaître progressivement, la création en temps réel des différentes carte et de la localisation continue du robot.
+**Ce que j'ai apprécié** : la satisfaction de voir la salle apparaître progressivement, la création en temps réel des différentes cartes et la localisation continue du robot.
 
-**Ce que j'améliorerais** : ajouter la fusion de capteur avec un IMU et Odométrie, la fermeture de boucle pour les grands parcours.
+**Ce que j'améliorerais** : ajouter la fusion de capteurs avec un IMU et l'odométrie, la fermeture de boucle pour les grands parcours.
